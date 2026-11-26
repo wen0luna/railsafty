@@ -55,6 +55,19 @@ test('response phases cannot be skipped and each action retains its timestamped 
   assert.equal(detected.alerts[0].timeline.length, 1);
 });
 
+test('automatic demo records simulated response actions without attributing them to an operator', () => {
+  const detected = activateScenario(createSimulation(10000000), 'person', 10000100, 'auto-demo');
+  const verified = advanceResponse(detected, 10000200, 'auto-demo');
+  const responding = advanceResponse(verified, 10000300, 'auto-demo');
+  const resolved = resolveCurrentAlert(responding, 10000400, 'auto-demo');
+
+  assert.deepEqual(resolved.alerts[0].timeline.map(({ note }) => note.key), [
+    'record.autoDemoDetected', 'record.autoDemoVerified', 'record.autoDemoDispatched', 'record.autoDemoHandled',
+  ]);
+  assert.equal(resolved.alerts[0].outcome, 'handled');
+  assert.equal(resolved.scenario, 'normal');
+});
+
 test('rain and slope simulations cross the documented thresholds while patrol remains safe', () => {
   for (const seconds of [0, 15, 120, 600]) {
     assert.ok(getTelemetry('rain', seconds).rainRate > 30);

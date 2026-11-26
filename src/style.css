@@ -323,13 +323,37 @@ h1 { display: flex; align-items: center; gap: 10px; font-size: 25px; letter-spac
 .selected-device-footer > span { display: flex; align-items: center; gap: 5px; min-width: 0; }
 .selected-device-footer > span > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .selected-device-footer > button { font-size: 8px; display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; color: #789467; padding: 1px 0 1px 5px; }
-.drill-dock { display: flex; align-items: center; gap: 15px; padding: 12px 14px; margin-bottom: 18px; border-color: #e7dece; background: #fffefb; position: sticky; top: 10px; z-index: 15; overflow: visible; box-shadow: 0 4px 16px #32412b07; }
+.drill-dock { display: flex; flex-wrap: wrap; align-items: center; gap: 15px; padding: 12px 14px; margin-bottom: 18px; border-color: #e7dece; background: #fffefb; position: sticky; top: 10px; z-index: 15; overflow: visible; box-shadow: 0 4px 16px #32412b07; }
 .drill-dock-heading { display: flex; align-items: center; gap: 9px; min-width: 172px; }
 .drill-dock-heading > span { color: #b58b51; background: #faf1e3; border: 1px solid #eee1cb; width: 35px; height: 38px; border-radius: 8px; display: grid; place-items: center; }
 .drill-dock-heading h2 { font-size: 12px; color: #7b735c; font-weight: 550; }
 .drill-dock-heading p { font-size: 7px; color: #b7ad94; margin-top: 6px; }
 .drill-dock .scenario-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 7px; flex: 1; padding: 0; margin: 0; min-width: 0; }
 .drill-safety-note { font-size: 7px; color: #b9b29f; text-align: center; white-space: nowrap; line-height: 1.9; }
+.auto-demo-controls { flex: 1 0 100%; display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(150px, .9fr) auto; align-items: center; gap: 14px; min-width: 0; border-top: 1px solid #f0ebdf; padding-top: 10px; }
+.auto-demo-summary { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.auto-demo-summary > span { display: grid; gap: 3px; min-width: 0; }
+.auto-demo-summary strong { color: #6b8060; font-size: 9px; font-weight: 600; }
+.auto-demo-summary small { color: #9da38f; font-size: 7px; line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.auto-demo-indicator { width: 8px; height: 8px; flex: 0 0 8px; border-radius: 50%; background: #a9b29f; box-shadow: 0 0 0 3px #edf0e9; }
+.auto-demo-controls[data-state="running"] .auto-demo-indicator { background: #46a77e; box-shadow: 0 0 0 3px #e4f2e9; animation: breathe 1.4s infinite; }
+.auto-demo-controls[data-state="paused"] .auto-demo-indicator { background: #d29b51; box-shadow: 0 0 0 3px #fbf0df; }
+.auto-demo-controls[data-state="error"] .auto-demo-indicator { background: #c9775a; box-shadow: 0 0 0 3px #f8eae4; }
+.auto-demo-progress-group { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.auto-demo-progress-track { flex: 1 1 auto; height: 4px; min-width: 35px; overflow: hidden; border-radius: 4px; background: #eceee6; }
+.auto-demo-progress-track > span { display: block; width: 0; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #5f9270, #82b298); transition: width .2s linear; }
+.auto-demo-progress-count, .auto-demo-countdown { color: #8d9783; font-size: 7px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.auto-demo-countdown { min-width: 23px; text-align: right; }
+.auto-demo-countdown[hidden] { display: none; }
+.auto-demo-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.auto-demo-loop { display: inline-flex; align-items: center; gap: 5px; color: #929783; font-size: 8px; white-space: nowrap; cursor: pointer; }
+.auto-demo-loop input { width: 12px; height: 12px; margin: 0; accent-color: #688e68; }
+.auto-demo-button { min-height: 30px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 6px 9px; border: 1px solid #638565; border-radius: 5px; background: #638565; color: #fff; font-size: 8px; white-space: nowrap; transition: background .18s, border-color .18s; }
+.auto-demo-button:hover { border-color: #4f7352; background: #4f7352; }
+.auto-demo-button.secondary { border-color: #e1dfd2; background: #fff; color: #777b69; }
+.auto-demo-button.secondary:hover { border-color: #c9cbb9; background: #f7f8f3; }
+.auto-demo-button:focus-visible, .auto-demo-loop:focus-within { outline: 2px solid #8da981; outline-offset: 2px; }
+.auto-demo-button[hidden] { display: none; }
 .event-panel { flex: 0 0 auto; padding-bottom: 8px; border-color: #dce7df; box-shadow: 0 4px 15px #324e3905; }
 .event-panel > .panel-header { height: 52px; border-bottom: 1px solid #edf1e9; margin-bottom: 0; }
 .event-panel > .panel-header h2 { font-size: 14px; }
@@ -621,6 +645,9 @@ kbd { border: 1px solid #e2eadd; border-bottom-width: 2px; padding: 3px 6px; bor
   .drill-dock-heading > span { width: 28px; height: 33px; }
   .drill-dock-heading > span > svg { width: 18px; height: 18px; }
   .drill-dock-heading p { display: none; }
+  .auto-demo-controls { grid-template-columns: minmax(0, 1fr) minmax(130px, .7fr) auto; gap: 10px; }
+  .auto-demo-actions { gap: 6px; }
+  .auto-demo-button { padding-left: 7px; padding-right: 7px; }
   .reconstruction-toolbar { gap: 8px; padding-left: 10px; padding-right: 10px; }
   .reconstruction-toolbar > small { display: none; }
   .reconstruction-toolbar > span { font-size: 9px; gap: 4px; }
@@ -688,6 +715,10 @@ kbd { border: 1px solid #e2eadd; border-bottom-width: 2px; padding: 3px 6px; bor
   .drill-dock-heading p { display: block; font-size: 7px; }
   .drill-dock-heading > span { width: 30px; height: 32px; }
   .drill-dock .scenario-grid { flex-basis: 100%; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 5px; }
+  .auto-demo-controls { grid-template-columns: minmax(0, 1fr) auto; gap: 8px 14px; }
+  .auto-demo-summary { grid-column: 1; grid-row: 1; }
+  .auto-demo-progress-group { grid-column: 1; grid-row: 2; }
+  .auto-demo-actions { grid-column: 2; grid-row: 1 / span 2; }
   .scenario-button { min-height: 43px; }
   .scenario-button > span > small { font-size: 5px; }
   .scene-panel { scroll-margin-top: 125px; }
@@ -882,6 +913,11 @@ kbd { border: 1px solid #e2eadd; border-bottom-width: 2px; padding: 3px 6px; bor
   .drill-dock .scenario-button { padding: 6px 4px; min-height: 42px; font-size: 9px; gap: 5px; }
   .drill-dock .scenario-button > svg { width: 15px; height: 15px; }
   .drill-dock .scenario-button small { font-size: 5px; margin-top: 3px; }
+  .auto-demo-controls { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .auto-demo-summary, .auto-demo-progress-group, .auto-demo-actions { grid-column: 1; grid-row: auto; }
+  .auto-demo-summary small { white-space: normal; }
+  .auto-demo-actions { justify-content: space-between; }
+  .auto-demo-button { min-height: 28px; font-size: 7px; }
   .scene-panel { scroll-margin-top: 155px; }
   .reconstruction-toolbar { flex-wrap: wrap; padding: 8px; gap: 7px; }
   .reconstruction-toolbar > span { font-size: 9px; }

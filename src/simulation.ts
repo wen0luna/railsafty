@@ -65,6 +65,7 @@ export const SCENARIOS: Record<ScenarioId, ScenarioDefinition> = {
 
 export const RESPONSE_PHASES = ['detected', 'verified', 'responding', 'resolved'] as const;
 export type ResponsePhase = typeof RESPONSE_PHASES[number];
+export type ResponseSource = 'operator' | 'auto-demo';
 export const RESPONSE_LABELS: Record<ResponsePhase, string> = {
   get detected() { return t('response.phase.detected'); },
   get verified() { return t('response.phase.verified'); },
@@ -209,7 +210,7 @@ function archivePending(alerts: AlertRecord[], now: number, resolution: Localize
   } : alert);
 }
 
-export function activateScenario(state: SimulationState, scenario: ScenarioId, now: number): SimulationState {
+export function activateScenario(state: SimulationState, scenario: ScenarioId, now: number, source: ResponseSource = 'operator'): SimulationState {
   if (state.scenario === scenario) return state;
   const alerts = archivePending(state.alerts, now, message('record.cancelled'), 'cancelled');
   if (scenario === 'normal') return { ...state, scenario, alerts };
@@ -218,17 +219,22 @@ export function activateScenario(state: SimulationState, scenario: ScenarioId, n
     alerts: [{
       id: `RG-2026${String(state.nextId).padStart(4, '0')}`, scenario, createdAt: now,
       resolvedAt: null, resolution: null, phase: 'detected', outcome: null,
-      timeline: [{ phase: 'detected', at: now, note: message('record.detected', { name: message(`scenario.${scenario}.name`) }) }],
+      timeline: [{
+        phase: 'detected', at: now,
+        note: message(source === 'auto-demo' ? 'record.autoDemoDetected' : 'record.detected', { name: message(`scenario.${scenario}.name`) }),
+      }],
     }, ...alerts],
     nextId: state.nextId + 1,
   };
 }
 
-export function advanceResponse(state: SimulationState, now: number): SimulationState {
+export function advanceResponse(state: SimulationState, now: number, source: ResponseSource = 'operator'): SimulationState {
   const active = state.alerts.find((alert) => alert.resolvedAt === null);
   if (!active || (active.phase !== 'detected' && active.phase !== 'verified')) return state;
   const phase: ResponsePhase = active.phase === 'detected' ? 'verified' : 'responding';
-  const note = phase === 'verified' ? message('record.verified') : message('record.dispatched', { action: message(`response.plan.${active.scenario}.action`) });
+  const note = phase === 'verified'
+    ? message(source === 'auto-demo' ? 'record.autoDemoVerified' : 'record.verified')
+    : message(source === 'auto-demo' ? 'record.autoDemoDispatched' : 'record.dispatched', { action: message(`response.plan.${active.scenario}.action`) });
   return {
     ...state,
     alerts: state.alerts.map((alert) => alert.id === active.id ? {
@@ -237,10 +243,11 @@ export function advanceResponse(state: SimulationState, now: number): Simulation
   };
 }
 
-export function resolveCurrentAlert(state: SimulationState, now: number): SimulationState {
+export function resolveCurrentAlert(state: SimulationState, now: number, source: ResponseSource = 'operator'): SimulationState {
   const active = state.alerts.find((alert) => alert.resolvedAt === null);
   if (!active || active.phase !== 'responding') return state;
-  return { ...state, scenario: 'normal', alerts: archivePending(state.alerts, now, message('record.handled'), 'handled') };
+  const note = message(source === 'auto-demo' ? 'record.autoDemoHandled' : 'record.handled');
+  return { ...state, scenario: 'normal', alerts: archivePending(state.alerts, now, note, 'handled') };
 }
 
 export function sensorReading(type: SensorType, telemetry: Telemetry, scenario: ScenarioId): string {

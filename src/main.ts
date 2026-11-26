@@ -1,10 +1,12 @@
 import './style.css';
 import { icon } from './icons.ts';
 import type { IconName } from './icons.ts';
+import { createAutoDemoSequence, nextAutoDemoIndex } from './auto-demo.ts';
+import type { AutoDemoScenario, AutoDemoStep } from './auto-demo.ts';
 import { RailwayScene } from './scene.ts';
 import type { ReconstructionMode, ReconstructionStats } from './reconstruction.ts';
 import { activateScenario, advanceResponse, createSimulation, DEVICES, getTelemetry, LABEL_DEVICE_IDS, RESPONSE_LABELS, RESPONSE_PHASES, RESPONSE_PLANS, resolveCurrentAlert, SCENARIOS, SENSOR_TYPES, sensorReading } from './simulation.ts';
-import type { AlertRecord, Device, ScenarioId, SensorType } from './simulation.ts';
+import type { AlertRecord, Device, ResponseSource, ScenarioId, SensorType } from './simulation.ts';
 import { applyTranslations, attributes, getLanguage, getLocale, restoreLanguage, saveLanguage, setLanguage, t, text, translateMessage } from './i18n.ts';
 import type { Language, LanguageStorage, MessageKey } from './i18n.ts';
 
@@ -20,6 +22,7 @@ if (!app) throw new Error('应用挂载点不存在。');
 
 const sensorTypes = Object.keys(SENSOR_TYPES) as SensorType[];
 const scenarioIds = Object.keys(SCENARIOS) as ScenarioId[];
+const autoDemoSteps = createAutoDemoSequence(scenarioIds.filter((id): id is AutoDemoScenario => id !== 'normal'));
 const reconstructionModes: { id: ReconstructionMode; key: MessageKey; icon: IconName }[] = [
   { id: 'scene', key: 'mode.scene', icon: 'box' },
   { id: 'vision', key: 'mode.vision', icon: 'camera' },
@@ -83,6 +86,11 @@ app.innerHTML = `
           <div class="drill-dock-heading"><span>${icon('warning', 22)}</span><div><h2 data-i18n="drill.title">${t('drill.title')}</h2><p data-i18n="drill.subtitle">${t('drill.subtitle')}</p></div></div>
           <div class="scenario-grid" role="group" ${attributes('drill.select', 'aria-label')}>${scenarioIds.map((id) => `<button class="scenario-button${id === 'normal' ? ' active' : ''}" data-scenario="${id}" ${attributes(`scenario.${id}.name`, 'aria-label')} aria-pressed="${id === 'normal'}">${icon(SCENARIOS[id].icon, 19)}<span>${text(`scenario.${id}.name`)}<small data-i18n="${id === 'normal' ? 'drill.restore' : SCENARIOS[id].risk === 'critical' ? 'drill.critical' : 'drill.warning'}">${t(id === 'normal' ? 'drill.restore' : SCENARIOS[id].risk === 'critical' ? 'drill.critical' : 'drill.warning')}</small></span></button>`).join('')}</div>
           <span class="drill-safety-note">${text('drill.simulationOnly')}<br>${text('drill.noCommands')}</span>
+          <div class="auto-demo-controls" id="auto-demo-controls" data-state="idle">
+            <div class="auto-demo-summary" aria-live="polite"><i class="auto-demo-indicator" aria-hidden="true"></i><span><strong id="auto-demo-status">${t('demo.statusReady')}</strong><small id="auto-demo-stage" data-i18n="demo.description">${t('demo.description')}</small></span></div>
+            <div class="auto-demo-progress-group"><div class="auto-demo-progress-track" id="auto-demo-progress" role="progressbar" ${attributes('demo.progressLabel', 'aria-label')} aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="auto-demo-progress-fill"></span></div><span class="auto-demo-progress-count" id="auto-demo-progress-count">${t('demo.progress', { current: 0, total: autoDemoSteps.length })}</span><span class="auto-demo-countdown" id="auto-demo-countdown" hidden></span></div>
+            <div class="auto-demo-actions"><label class="auto-demo-loop" data-demo-control="loop"><input id="auto-demo-loop" type="checkbox">${text('demo.loop')}</label><button class="auto-demo-button" id="auto-demo-toggle" type="button" data-demo-control="button" data-demo-action="toggle">${icon('play', 15)}<span>${t('demo.start')}</span></button><button class="auto-demo-button secondary" id="auto-demo-stop" type="button" data-demo-control="button" data-demo-action="stop" hidden>${icon('close', 14)}<span>${text('demo.takeover')}</span></button></div>
+          </div>
         </section>
 
         <section class="workspace" ${attributes('scene.workspace', 'aria-label')}>
@@ -137,6 +145,13 @@ let selectedDevice = DEVICES.find((device) => device.id === 'HD-003')!;
 let scene: RailwayScene | null = null;
 let reconstructionMode: ReconstructionMode = 'scene';
 let completedAlert: AlertRecord | null = null;
+type AutoDemoStatus = 'idle' | 'running' | 'paused' | 'stopped' | 'complete' | 'error';
+let autoDemoStatus: AutoDemoStatus = 'idle';
+let autoDemoIndex = -1;
+let autoDemoLoop = false;
+let autoDemoDeadline = 0;
+let autoDemoRemainingMs = 0;
+let autoDemoTimer: ReturnType<typeof setTimeout> | null = null;
 let labelsVisible = true;
 let coverageVisible = true;
 let nightMode = false;
@@ -162,6 +177,63 @@ function toast(message: string, error = false): void {
   target.querySelector('span')!.textContent = message;
   target.className = `toast visible${error ? ' error' : ''}`;
   toastTimer = setTimeout(() => target.classList.remove('visible'), 3600);
+}
+
+function isAutoDemoActive(): boolean {
+  return autoDemoStatus === 'running' || autoDemoStatus === 'paused';
+}
+
+function autoDemoStepTitle(step: AutoDemoStep): string {
+  return 'scenario' in step ? t(step.title, { name: SCENARIOS[step.scenario].name }) : t(step.title);
+}
+
+function updateAutoDemoProgress(): void {
+  const step = autoDemoIndex >= 0 ? autoDemoSteps[autoDemoIndex] : undefined;
+  const remainingMs = autoDemoStatus === 'running' ? Math.max(0, autoDemoDeadline - Date.now()) : autoDemoRemainingMs;
+  const progress = autoDemoStatus === 'complete'
+    ? 100
+    : step ? ((autoDemoIndex + 1 - remainingMs / step.durationMs) / autoDemoSteps.length) * 100 : 0;
+  const percent = Math.round(Math.max(0, Math.min(100, progress)));
+  element('#auto-demo-progress-fill').style.width = `${percent}%`;
+  element('#auto-demo-progress').setAttribute('aria-valuenow', String(percent));
+  const current = autoDemoStatus === 'complete' ? autoDemoSteps.length : Math.max(0, autoDemoIndex + 1);
+  element('#auto-demo-progress-count').textContent = t('demo.progress', { current, total: autoDemoSteps.length });
+  const countdown = element('#auto-demo-countdown');
+  countdown.hidden = !isAutoDemoActive();
+  countdown.textContent = t('demo.remaining', { seconds: Math.ceil(remainingMs / 1000) });
+}
+
+function updateAutoDemoControls(): void {
+  const statusMessages: Record<AutoDemoStatus, MessageKey> = {
+    idle: 'demo.statusReady',
+    running: 'demo.statusRunning',
+    paused: 'demo.statusPaused',
+    stopped: 'demo.statusStopped',
+    complete: 'demo.statusComplete',
+    error: 'demo.statusFailed',
+  };
+  const step = autoDemoIndex >= 0 ? autoDemoSteps[autoDemoIndex] : undefined;
+  element('#auto-demo-controls').dataset.state = autoDemoStatus;
+  element('#auto-demo-status').textContent = t(statusMessages[autoDemoStatus]);
+  element('#auto-demo-stage').textContent = autoDemoStatus === 'idle'
+    ? t('demo.description')
+    : autoDemoStatus === 'stopped'
+      ? t('demo.manualHint')
+      : autoDemoStatus === 'complete'
+        ? t('demo.finishedHint')
+        : autoDemoStatus === 'error'
+          ? t('demo.failedHint')
+          : step ? autoDemoStepTitle(step) : t('demo.description');
+
+  const toggle = element<HTMLButtonElement>('#auto-demo-toggle');
+  const labelKey: MessageKey = autoDemoStatus === 'running' ? 'demo.pause' : autoDemoStatus === 'paused' ? 'demo.resume' : 'demo.start';
+  const renderKey = `${labelKey}:${getLanguage()}`;
+  if (toggle.dataset.renderKey !== renderKey) {
+    toggle.innerHTML = `${icon(autoDemoStatus === 'running' ? 'pause' : 'play', 15)}<span>${t(labelKey)}</span>`;
+    toggle.dataset.renderKey = renderKey;
+  }
+  element<HTMLButtonElement>('#auto-demo-stop').hidden = !isAutoDemoActive();
+  updateAutoDemoProgress();
 }
 
 function reportSceneError(message: string): void {
@@ -218,14 +290,14 @@ function renderFusionStats(stats: ReconstructionStats | null): void {
   element('#fusion-position-error').textContent = stats ? `${stats.fusionError.toFixed(2)} m` : '—';
 }
 
-function setReconstructionMode(mode: ReconstructionMode): void {
-  if (!scene) { toast(t('error.engineUnavailable'), true); return; }
+function setReconstructionMode(mode: ReconstructionMode): boolean {
+  if (!scene) { toast(t('error.engineUnavailable'), true); return false; }
   try {
     scene.setReconstructionMode(mode);
   } catch (error) {
     console.error('三维重建显示失败', error);
     toast(t('error.reconstruction'), true);
-    return;
+    return false;
   }
   reconstructionMode = mode;
   element('#fusion-hud').hidden = mode === 'scene';
@@ -235,28 +307,53 @@ function setReconstructionMode(mode: ReconstructionMode): void {
     button.classList.toggle('active', active);
     button.setAttribute('aria-pressed', String(active));
   });
+  return true;
 }
 
-function advanceCurrentResponse(): void {
+function advanceResponseState(expectedPhase: 'detected' | 'verified', source: ResponseSource = 'operator'): AlertRecord | null {
   const active = state.alerts.find((alert) => alert.resolvedAt === null);
-  if (!active) { toast(t('toast.noIncident'), true); return; }
-  if (active.phase === 'responding') { openResolveDialog(); return; }
-  const next = advanceResponse(state, Date.now());
-  if (next === state) { toast(t('toast.followSteps'), true); return; }
+  if (!active || active.phase !== expectedPhase) return null;
+  const next = advanceResponse(state, Date.now(), source);
+  if (next === state) return null;
   state = next;
   const updated = state.alerts.find((alert) => alert.id === active.id)!;
   scene?.setResponsePhase(updated.phase);
   renderState();
   refreshTelemetry();
   if (dialog.open && dialogKind === 'resolve') openResolveDialog();
+  return updated;
+}
+
+function advanceCurrentResponse(): void {
+  const active = state.alerts.find((alert) => alert.resolvedAt === null);
+  if (!active) { toast(t('toast.noIncident'), true); return; }
+  if (active.phase === 'responding') { openResolveDialog(); return; }
+  if (active.phase === 'resolved') { toast(t('toast.followSteps'), true); return; }
+  const updated = advanceResponseState(active.phase);
+  if (!updated) { toast(t('toast.followSteps'), true); return; }
   toast(updated.phase === 'verified' ? t('toast.verified') : t('toast.dispatched', { action: RESPONSE_PLANS[active.scenario].action }));
 }
 
-function setScenario(id: ScenarioId): void {
-  const next = activateScenario(state, id, Date.now());
+function completeCurrentResponse(source: ResponseSource = 'operator'): boolean {
+  const active = state.alerts.find((alert) => alert.resolvedAt === null);
+  if (!active || active.phase !== 'responding') return false;
+  const next = resolveCurrentAlert(state, Date.now(), source);
+  if (next === state) return false;
+  state = next;
+  completedAlert = state.alerts.find((alert) => alert.id === active.id)!;
+  scene?.setScenario('normal');
+  scene?.setView('overview');
+  dialog.close();
+  renderState();
+  refreshTelemetry();
+  return true;
+}
+
+function setScenario(id: ScenarioId, silent = false, source: ResponseSource = 'operator'): void {
+  const next = activateScenario(state, id, Date.now(), source);
   if (next === state) {
     if (id !== 'normal') scene?.focusIncident();
-    toast(t(id === 'normal' ? 'toast.alreadyNormal' : 'toast.alreadyActive'));
+    if (!silent) toast(t(id === 'normal' ? 'toast.alreadyNormal' : 'toast.alreadyActive'));
     return;
   }
   state = next;
@@ -267,8 +364,134 @@ function setScenario(id: ScenarioId): void {
   else scene?.focusIncident();
   refreshTelemetry();
   renderState();
-  if (id !== 'normal') element('#scene-panel').scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth', block: 'start' });
-  toast(id === 'normal' ? t('toast.restored') : t('toast.started', { name: SCENARIOS[id].name, count: SCENARIOS[id].sensors.length }));
+  if (!silent && id !== 'normal') element('#scene-panel').scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth', block: 'start' });
+  if (!silent) toast(id === 'normal' ? t('toast.restored') : t('toast.started', { name: SCENARIOS[id].name, count: SCENARIOS[id].sensors.length }));
+}
+
+function performAutoDemoStep(step: AutoDemoStep): boolean {
+  if (!scene) return false;
+  switch (step.kind) {
+    case 'overview':
+      completedAlert = null;
+      element<HTMLSelectElement>('#region-select').value = 'all';
+      element('#scene-region').textContent = t('region.all');
+      renderState();
+      if (!setReconstructionMode('scene')) return false;
+      scene.setView('overview');
+      return true;
+    case 'patrol':
+      scene.setView('patrol');
+      return true;
+    case 'scenario':
+      if (!setReconstructionMode('scene')) return false;
+      setScenario(step.scenario, true, 'auto-demo');
+      return true;
+    case 'fusion':
+      if (!setReconstructionMode('fusion')) return false;
+      scene.focusIncident();
+      return true;
+    case 'review':
+      return advanceResponseState('detected', 'auto-demo')?.phase === 'verified';
+    case 'dispatch':
+      return advanceResponseState('verified', 'auto-demo')?.phase === 'responding';
+    case 'recheck':
+      return completeCurrentResponse('auto-demo');
+    case 'complete':
+      if (!setReconstructionMode('scene')) return false;
+      scene.setView('overview');
+      return true;
+  }
+}
+
+function failAutoDemo(error: unknown): void {
+  console.error('自动演示失败', error);
+  if (autoDemoStatus === 'running') autoDemoRemainingMs = Math.max(0, autoDemoDeadline - Date.now());
+  if (autoDemoTimer !== null) clearTimeout(autoDemoTimer);
+  autoDemoTimer = null;
+  autoDemoStatus = 'error';
+  renderState();
+  updateAutoDemoControls();
+  toast(t('demo.failed'), true);
+}
+
+function runAutoDemoStep(index: number): void {
+  const step = autoDemoSteps[index];
+  if (!step) { failAutoDemo(new Error(`自动演示步骤不存在：${index}`)); return; }
+  autoDemoIndex = index;
+  autoDemoStatus = 'running';
+  try {
+    if (!performAutoDemoStep(step)) throw new Error(`自动演示步骤未能完成：${step.kind}`);
+  } catch (error) {
+    failAutoDemo(error);
+    return;
+  }
+  autoDemoRemainingMs = step.durationMs;
+  autoDemoDeadline = Date.now() + step.durationMs;
+  autoDemoTimer = setTimeout(advanceAutoDemo, step.durationMs);
+  updateAutoDemoControls();
+}
+
+function advanceAutoDemo(): void {
+  autoDemoTimer = null;
+  if (autoDemoStatus !== 'running') return;
+  const nextIndex = nextAutoDemoIndex(autoDemoIndex, autoDemoSteps.length, autoDemoLoop);
+  if (nextIndex === null) {
+    autoDemoStatus = 'complete';
+    autoDemoRemainingMs = 0;
+    renderState();
+    updateAutoDemoControls();
+    return;
+  }
+  runAutoDemoStep(nextIndex);
+}
+
+function startAutoDemo(): void {
+  if (!scene) { toast(t('error.engineUnavailable'), true); return; }
+  if (state.alerts.some((alert) => alert.resolvedAt === null)) {
+    toast(t('demo.requiresClear'), true);
+    return;
+  }
+  if (autoDemoTimer !== null) clearTimeout(autoDemoTimer);
+  autoDemoTimer = null;
+  if (dialog.open) dialog.close();
+  autoDemoLoop = element<HTMLInputElement>('#auto-demo-loop').checked;
+  autoDemoIndex = -1;
+  autoDemoRemainingMs = 0;
+  autoDemoStatus = 'running';
+  runAutoDemoStep(0);
+}
+
+function pauseAutoDemo(): void {
+  if (autoDemoStatus !== 'running') return;
+  autoDemoRemainingMs = Math.max(0, autoDemoDeadline - Date.now());
+  if (autoDemoTimer !== null) clearTimeout(autoDemoTimer);
+  autoDemoTimer = null;
+  autoDemoStatus = 'paused';
+  renderState();
+  updateAutoDemoControls();
+}
+
+function resumeAutoDemo(): void {
+  if (autoDemoStatus !== 'paused') return;
+  autoDemoStatus = 'running';
+  if (autoDemoRemainingMs <= 0) {
+    advanceAutoDemo();
+    return;
+  }
+  autoDemoDeadline = Date.now() + autoDemoRemainingMs;
+  autoDemoTimer = setTimeout(advanceAutoDemo, autoDemoRemainingMs);
+  renderState();
+  updateAutoDemoControls();
+}
+
+function stopAutoDemo(): void {
+  if (!isAutoDemoActive()) return;
+  if (autoDemoStatus === 'running') autoDemoRemainingMs = Math.max(0, autoDemoDeadline - Date.now());
+  if (autoDemoTimer !== null) clearTimeout(autoDemoTimer);
+  autoDemoTimer = null;
+  autoDemoStatus = 'stopped';
+  renderState();
+  updateAutoDemoControls();
 }
 
 function eventMarkup(alert: AlertRecord, compact = false): string {
@@ -353,10 +576,15 @@ function renderState(): void {
   actionbar.hidden = !active;
   if (active) {
     const level = t(definition.risk === 'critical' ? 'response.priorityII' : 'response.priorityIII');
-    const phaseName = t(active.phase === 'detected' ? 'response.reviewPending' : active.phase === 'verified' ? 'response.dispatchPending' : 'response.inProgress');
+    const phaseName = isAutoDemoActive()
+      ? t('demo.workflow')
+      : t(active.phase === 'detected' ? 'response.reviewPending' : active.phase === 'verified' ? 'response.dispatchPending' : 'response.inProgress');
     element('#command-severity').textContent = level;
     response.className = 'response-state incident-response';
-    response.innerHTML = `<div class="incident-response-title"><span>${icon(definition.icon, 24)}</span><div><strong>${definition.name} · ${phaseName}</strong><small>${definition.location}</small></div></div><div class="incident-readings">${incidentMetrics().map((metric, index) => `<article><span>${metric.label}</span><b data-incident-value="${index}">${metric.value}</b><small>${metric.note}</small></article>`).join('')}</div><div class="evidence-sensors">${definition.sensors.map((type) => `<span>${icon(SENSOR_TYPES[type].icon, 13)}${SENSOR_TYPES[type].shortName}</span>`).join('')}</div><ol class="response-timeline" aria-label="${t('response.flow')}">${responseSteps(active)}</ol><p class="response-instruction">${active.phase === 'responding' ? RESPONSE_PLANS[active.scenario].instruction : t(active.phase === 'verified' ? 'response.dispatchInstruction' : 'response.reviewInstruction')}</p><button class="primary-response-button" data-action="response-next">${icon(active.phase === 'responding' ? 'check' : 'arrow', 16)}${responseButtonLabel(active)}${icon('arrow', 15)}</button><div class="response-secondary"><button id="resolve-alert" data-action="review-evidence">${icon('eye', 13)}${t('response.evidence')}</button><button data-action="focus-incident">${icon('pin', 13)}${t('response.focus')}</button><button data-action="incident-fusion">${icon('layers', 13)}${t('mode.fusion')}</button></div><small class="response-safety-note">${t('response.safety')}</small>`;
+    const responseInstruction = isAutoDemoActive()
+      ? t('demo.workflowInstruction')
+      : active.phase === 'responding' ? RESPONSE_PLANS[active.scenario].instruction : t(active.phase === 'verified' ? 'response.dispatchInstruction' : 'response.reviewInstruction');
+    response.innerHTML = `<div class="incident-response-title"><span>${icon(definition.icon, 24)}</span><div><strong>${definition.name} · ${phaseName}</strong><small>${definition.location}</small></div></div><div class="incident-readings">${incidentMetrics().map((metric, index) => `<article><span>${metric.label}</span><b data-incident-value="${index}">${metric.value}</b><small>${metric.note}</small></article>`).join('')}</div><div class="evidence-sensors">${definition.sensors.map((type) => `<span>${icon(SENSOR_TYPES[type].icon, 13)}${SENSOR_TYPES[type].shortName}</span>`).join('')}</div><ol class="response-timeline" aria-label="${t('response.flow')}">${responseSteps(active)}</ol><p class="response-instruction">${responseInstruction}</p><button class="primary-response-button" data-action="response-next">${icon(active.phase === 'responding' ? 'check' : 'arrow', 16)}${responseButtonLabel(active)}${icon('arrow', 15)}</button><div class="response-secondary"><button id="resolve-alert" data-action="review-evidence">${icon('eye', 13)}${t('response.evidence')}</button><button data-action="focus-incident">${icon('pin', 13)}${t('response.focus')}</button><button data-action="incident-fusion">${icon('layers', 13)}${t('mode.fusion')}</button></div><small class="response-safety-note">${t('response.safety')}</small>`;
     banner.className = `incident-banner is-active ${definition.risk}`;
     banner.innerHTML = `<span class="incident-banner-icon">${icon(definition.icon, 23)}</span><div class="incident-banner-copy"><span>${level}<b>SIMULATED INCIDENT</b></span><strong>${definition.title}</strong><small>${definition.location} · ${phaseName}</small></div><div class="incident-banner-clock" aria-live="off"><span>${t('response.elapsed')}</span><b data-incident-elapsed>${elapsedText(Date.now() - active.createdAt)}</b></div>`;
     actionbar.innerHTML = `<ol class="response-steps" aria-label="${t('response.progress')}">${responseSteps(active)}</ol><button class="primary-response-button" data-action="response-next">${responseButtonLabel(active)}${icon('arrow', 15)}</button>`;
@@ -400,6 +628,7 @@ function tick(): void {
   element('#calendar').textContent = dateFormatter.format(now).replaceAll('/', '.');
   document.querySelectorAll<HTMLElement>('.feed-time').forEach((target) => { target.textContent = time; });
   refreshTelemetry();
+  updateAutoDemoProgress();
 }
 
 function openDialog(kind: string, title: string, eyebrow: string, content: string): void {
@@ -610,6 +839,7 @@ function refreshLocalizedInterface(): void {
   element('#scene-region').textContent = t(regionKeys[element<HTMLSelectElement>('#region-select').value]);
   element('#fusion-mode-name').textContent = t(reconstructionModes.find((mode) => mode.id === reconstructionMode)!.key);
   renderState();
+  updateAutoDemoControls();
   scene?.updateLocale();
   renderFusionStats(scene?.getReconstructionStats() ?? null);
   tick();
@@ -672,6 +902,18 @@ document.addEventListener('click', (event) => {
   if (!(event.target instanceof Element)) return;
   const button = event.target.closest<HTMLElement>('button');
   if (!button) return;
+  if (button.dataset.demoAction === 'toggle') {
+    if (autoDemoStatus === 'running') pauseAutoDemo();
+    else if (autoDemoStatus === 'paused') resumeAutoDemo();
+    else startAutoDemo();
+    return;
+  }
+  if (button.dataset.demoAction === 'stop') { stopAutoDemo(); return; }
+  if (isAutoDemoActive()
+    && !button.hasAttribute('data-demo-control')
+    && !button.dataset.language
+    && button.id !== 'global-fullscreen'
+    && button.id !== 'scene-fullscreen') stopAutoDemo();
   const language = button.dataset.language;
   if (language === 'zh' || language === 'en') changeInterfaceLanguage(language);
   if (button.dataset.panel) panelActions[button.dataset.panel]?.();
@@ -730,15 +972,7 @@ document.addEventListener('click', (event) => {
     const active = state.alerts.find((alert) => alert.resolvedAt === null);
     if (!active || active.phase !== 'responding') { toast(t('toast.prerequisites'), true); return; }
     if (!element<HTMLInputElement>('#clearance-confirm').checked) { toast(t('toast.confirmRecheck'), true); return; }
-    const next = resolveCurrentAlert(state, Date.now());
-    if (next === state) { toast(t('toast.notReady'), true); return; }
-    state = next;
-    completedAlert = state.alerts.find((alert) => alert.id === active.id)!;
-    scene?.setScenario('normal');
-    scene?.setView('overview');
-    dialog.close();
-    renderState();
-    refreshTelemetry();
+    if (!completeCurrentResponse()) { toast(t('toast.notReady'), true); return; }
     toast(t('toast.completed'));
   }
   if (button.dataset.action === 'reset-settings') {
@@ -747,6 +981,18 @@ document.addEventListener('click', (event) => {
     toggleDisplay('night', false);
     openSettingsDialog();
     toast(t('toast.settingsReset'));
+  }
+}, { signal: events.signal });
+
+document.addEventListener('pointerdown', (event) => {
+  if (!isAutoDemoActive() || !(event.target instanceof Element)) return;
+  if (event.target.closest('[data-demo-control], [data-language], #global-fullscreen, #scene-fullscreen')) return;
+  if (event.target.closest('button, input, select, canvas, #scene-host')) stopAutoDemo();
+}, { signal: events.signal });
+
+document.addEventListener('change', (event) => {
+  if (event.target instanceof HTMLInputElement && event.target.id === 'auto-demo-loop') {
+    autoDemoLoop = event.target.checked;
   }
 }, { signal: events.signal });
 
@@ -843,6 +1089,7 @@ if (import.meta.hot) {
     clearInterval(timer);
     clearInterval(previewTimer);
     clearTimeout(toastTimer);
+    if (autoDemoTimer !== null) clearTimeout(autoDemoTimer);
     drillDockObserver.disconnect();
     events.abort();
     dialog.close();
